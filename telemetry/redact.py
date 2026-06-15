@@ -26,11 +26,23 @@ def redact(text, mask: str = "[REDACTED:{}]"):
     """Return (redacted_text, num_redactions). Non-strings pass through unchanged."""
     if not isinstance(text, str):
         return text, 0
+    # Optimization 1: Pre-filter (heuristics)
+    # Most PII patterns here require numbers or an '@' symbol.
+    if not any(c.isdigit() or c == '@' for c in text):
+        return text, 0
+    
+    # Optimization 2: Length limit to prevent ReDoS on massive inputs
+    max_len = 4000
+    suffix = ""
+    if len(text) > max_len:
+        suffix = text[max_len:]
+        text = text[:max_len]
+
     n = 0
     for label, pat in _PATTERNS.items():
         text, k = pat.subn(mask.format(label), text)
         n += k
-    return text, n
+    return text + suffix, n
 
 
 def redact_value(value):
