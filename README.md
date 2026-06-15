@@ -6,7 +6,7 @@
 
 Hệ thống đã đạt điểm số xuất sắc **90.62 / 100** trên tập Private Test.
 
-![Kết quả Private Score](../2A202600723-NguyenThiVang-Day-13-Lab-Observathon/docs/image.png)
+![Kết quả Private Score](docs/image.png)
 
 ### Các Tối ưu đã thực hiện (Optimizations)
 - **Chống Prompt Injection (Smart Truncation):** Hàm `sanitize_question` trong `wrapper.py` đã được nâng cấp để phát hiện các từ khóa độc hại (`thay đổi`, `áp dụng giá`, `bỏ qua`) trong mục "GHI CHÚ" và tự động cắt bỏ phần lệnh độc hại, trong khi vẫn bảo toàn được địa chỉ giao hàng hợp lệ của khách hàng. Đi kèm với đó là System Prompt siêu mạnh mẽ cảnh báo LLM không tuân theo các chỉ dẫn giả mạo.
