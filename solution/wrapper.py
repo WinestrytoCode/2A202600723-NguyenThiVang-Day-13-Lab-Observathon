@@ -65,22 +65,17 @@ def _cache_key(question: str, model: str, temperature: float) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
-def sanitize_question(q: str) -> str:
-    """Strip prompt-injection instructions hidden inside order notes.
+_INJECT_WORDS = re.compile(
+    r'\b(giá|gia|price|hệ thống|he thong|thay đổi|thay doi|override|set|áp dụng|ap dung|bỏ qua|bo qua)\b',
+    re.IGNORECASE,
+)
 
-    Detects Vietnamese / English note-section markers (GHI CHÚ, Note, …) and
-    removes numeric prices + instruction verbs from the suffix so the LLM never
-    sees injected price overrides or system commands.
-    """
-    # Trimming & Compacting Context: Remove redundant whitespace to save tokens/cost
+def sanitize_question(q: str) -> str:
     q = re.sub(r'\s+', ' ', q).strip()
-    
-    # Length Limit: Protect against DDoS / Cost blowup from massive prompts
     max_len = 1000
     if len(q) > max_len:
         q = q[:max_len]
         
-
     match = _INJECT_PATTERN.search(q)
     if not match:
         return q
@@ -211,8 +206,10 @@ def mitigate(call_next, question, config, context):
             try:
                 result = observed_call(call_next, sanitized_q, config, context)
             except Exception as exc:
-                # Graceful Fallback: Avoid propagating exception or returning 'error' status.
-                # 'error' status causes Error Rate penalty in scoring.
+                import sys
+                import traceback
+                print(f"CRASH: {exc}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
                 agent_span.set_status("error")
                 agent_span.set(error_type=type(exc).__name__, error_msg=str(exc))
                 # Return 'ok' to preserve 1.0 Error metric, using a safe default answer.

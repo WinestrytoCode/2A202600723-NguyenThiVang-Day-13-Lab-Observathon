@@ -1,7 +1,7 @@
 {
   "provider": "openai",
   "model": "gpt-5.4-nano",
-  "model_price_tier": "standard",
+  "model_price_tier": "economy",
   "max_steps": 12,
   "loop_guard": true,
   "temperature": 0.2,
