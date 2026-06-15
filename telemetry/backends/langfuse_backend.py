@@ -21,18 +21,72 @@ class LangfuseBackend(Backend):
             raise RuntimeError("langfuse not installed (pip install langfuse)") from exc
         self._client = get_client()
 
+    def _sanitize_metadata(self, attributes: dict) -> dict[str, str]:
+        sanitized = {}
+        for k, v in attributes.items():
+            if v is None:
+                continue
+            # Ensure metadata values are strings of max length 200
+            v_str = str(v)
+            if len(v_str) > 200:
+                v_str = v_str[:197] + "..."
+            sanitized[str(k)] = v_str
+        return sanitized
+
     def _emit(self, span: dict, parent=None):
-        # Recreate the span tree in Langfuse using the v4 context-manager API.
+        name = span["name"]
+        attrs = span.get("attributes", {}).copy()
+
+        # Determine observation type
+        as_type = "generation" if name.startswith("chat") or name.startswith("agent") else "span"
+
+        # Extract inputs/outputs/model/usage if present
+        obs_input = attrs.pop("input", None)
+        obs_output = attrs.pop("output", None)
+        obs_model = attrs.pop("model", None)
+        obs_usage = attrs.pop("usage", None)
+
+        # Sanitize remaining attributes as metadata
+        metadata = self._sanitize_metadata({
+            **attrs,
+            "duration_ms": span["duration_ms"],
+            "status": span["status"]
+        })
+
+        # Start the observation
         cm = self._client.start_as_current_observation(
-            name=span["name"],
-            as_type="generation" if span["name"].startswith("chat") else "span",
-            metadata={**span.get("attributes", {}), "duration_ms": span["duration_ms"],
-                      "status": span["status"]},
+            name=name,
+            as_type=as_type,
+            input=obs_input,
+            model=obs_model,
+            metadata=metadata,
         )
-        with cm:
+        with cm as obs:
+            if obs_output is not None or obs_usage is not None:
+                # Format usage dictionary for Langfuse v4
+                formatted_usage = None
+                if obs_usage:
+                    # Our app's usage is: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
+                    prompt_tokens = obs_usage.get("prompt_tokens", 0)
+                    completion_tokens = obs_usage.get("completion_tokens", 0)
+                    total_tokens = obs_usage.get("total_tokens", prompt_tokens + completion_tokens)
+                    formatted_usage = {
+                        "input": prompt_tokens,
+                        "output": completion_tokens,
+                        "total": total_tokens
+                    }
+
+                obs.update(output=obs_output, usage=formatted_usage)
+
             for child in span.get("children", []):
                 self._emit(child)
 
     def export_trace(self, trace: dict) -> None:
-        self._emit(trace)
+        attrs = trace.get("attributes", {})
+        session_id = str(attrs.get("session_id")) if attrs.get("session_id") is not None else None
+        user_id = str(attrs.get("user_id")) if attrs.get("user_id") is not None else None
+
+        from langfuse import propagate_attributes
+        with propagate_attributes(session_id=session_id, user_id=user_id):
+            self._emit(trace)
         self._client.flush()

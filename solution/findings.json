@@ -1,12 +1,36 @@
 {
-  "team": "TODO-team-name",
+  "team": "NguyenThiVang-2A202600723",
   "schema_version": 1,
   "findings": [
     {
+      "fault_class": "infinite_loop",
+      "evidence": "Requests prac-012 and prac-015 failed with status max_steps and had 12 repeated tool calls to check_stock",
+      "root_cause": "The loop_guard is set to false in config.json, allowing the LLM to cycle tool calls infinitely.",
+      "suggested_fix": "Enable loop_guard: true in config.json."
+    },
+    {
+      "fault_class": "pii_leak",
+      "evidence": "Request prac-010 and prac-013 leaked customer phone numbers (0901234567, 0938222111) in the final answers.",
+      "root_cause": "redact_pii is false in config.json and prompt does not forbid echoing PII.",
+      "suggested_fix": "Enable redact_pii: true in config.json and add PII protection rule to the system prompt."
+    },
+    {
+      "fault_class": "error_spike",
+      "evidence": "Request prac-005 failed due to upstream_unavailable errors on tool calls.",
+      "root_cause": "High tool_error_rate (0.18) with disabled retry mechanism in config.json.",
+      "suggested_fix": "Enable retry with max_attempts 3 and backoff in config.json."
+    },
+    {
+      "fault_class": "tool_failure",
+      "evidence": "MacBook is always marked as out of stock due to catalog_override, and unicode city names like hà nội and Da Lat cause destination_not_served errors.",
+      "root_cause": "catalog_override contains MacBook override, and normalize_unicode is false.",
+      "suggested_fix": "Clear catalog_override and enable normalize_unicode: true in config.json."
+    },
+    {
       "fault_class": "latency_spike",
-      "evidence": {"metric": "latency_p95_ms", "observed": "TODO from your telemetry", "trace_ids": []},
-      "root_cause": "TODO: what config knob or behavior causes it?",
-      "suggested_fix": "TODO: config change and/or wrapper mitigation"
+      "evidence": "observed latency_p95_ms is above 20000ms for loop requests.",
+      "root_cause": "Requests getting stuck in infinite check_stock loops and lacking cache.",
+      "suggested_fix": "Set loop_guard: true and enable cache in config.json."
     }
   ]
 }

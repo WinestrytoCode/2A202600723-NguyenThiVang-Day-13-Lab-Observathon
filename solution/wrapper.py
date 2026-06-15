@@ -16,18 +16,77 @@ the config you pass to call_next, e.g.:
 (Or just edit solution/prompt.txt for a single static prompt used on every request.)
 """
 from __future__ import annotations
+import uuid
+import re
+from solution.instrument import observed_call
 
-# You may reuse the Day 13 toolkit, e.g.:
-# from telemetry.logger import logger
-# from telemetry.cost import cost_from_usage
-# from telemetry.redact import redact
+
+def sanitize_question(q: str) -> str:
+    # Spot order notes / instructions (e.g. "Ghi chú", "Note", "Chú ý") and strip prompt injection overrides
+    pattern = re.compile(r'\b(ghi chú|ghi chu|note|chú ý|chu y)\b', re.IGNORECASE)
+    match = pattern.search(q)
+    if match:
+        idx = match.start()
+        prefix = q[:idx]
+        suffix = q[idx:]
+        # Neutralize any numeric prices in the note section to block price injection
+        suffix = re.sub(r'\d+[\d.,]*', '', suffix)
+        # Strip common instruction keywords
+        for word in ["giá", "gia", "price", "hệ thống", "he thong", "thay đổi", "thay doi", "override", "set", "áp dụng", "ap dung"]:
+            suffix = re.compile(re.escape(word), re.IGNORECASE).sub("", suffix)
+        return prefix + suffix
+    return q
 
 
 def mitigate(call_next, question, config, context):
-    # TODO: add observability here (log latency, tokens, cost, errors, PII, tool counts).
-    # TODO: add mitigations (retry on error, cache repeats, route cheap, reset drifting
-    #       sessions, validate arithmetic, sanitize order notes, redact PII...).
-    # TODO: optionally route a better system prompt:
-    #       conf = dict(config); conf["system_prompt"] = "..."; return call_next(question, conf)
-    result = call_next(question, config)        # <-- passthrough stub: replace me
-    return result
+    from telemetry.logger import set_correlation_id, new_correlation_id
+    from telemetry.tracing import Tracer, Span
+
+    # Set correlation ID for structured logging correlation
+    cid = new_correlation_id()
+    set_correlation_id(cid)
+
+    # Sanitize prompt injection attempts in the question notes
+    sanitized_q = sanitize_question(question)
+
+    # Initialize Tracer (which uses factory to resolve Langfuse or Console/File backends)
+    tracer = Tracer()
+    with tracer.start_span("agent-request", input=sanitized_q, session_id=context.get("session_id"), turn_index=context.get("turn_index"), qid=context.get("qid")) as root_span:
+        with tracer.start_span("chat-agent-call", input=sanitized_q) as agent_span:
+            # Invoke the observed black-box agent with sanitized input
+            result = observed_call(call_next, sanitized_q, config, context)
+            
+            meta = result.get("meta", {})
+            agent_span.set(
+                output=result.get("answer"),
+                model=meta.get("model"),
+                usage=meta.get("usage"),
+                status=result.get("status")
+            )
+            
+            # Map the agent's internal trace steps to child spans under the agent-call
+            if isinstance(result.get("trace"), list):
+                for idx, step in enumerate(result["trace"]):
+                    if isinstance(step, dict):
+                        action = step.get("action", f"step-{idx}")
+                        step_span = Span(
+                            name=f"tool-{action}",
+                            trace_id=tracer.trace_id,
+                            span_id=uuid.uuid4().hex[:8],
+                            parent_id=agent_span.span.span_id,
+                            start_ms=agent_span.span.start_ms + idx * 10,
+                            end_ms=agent_span.span.start_ms + idx * 10 + 5,
+                            attributes={
+                                **step,
+                                "input": step.get("args") or step.get("input"),
+                                "output": step.get("observation") or step.get("output")
+                            },
+                            status="ok" if not step.get("error") else "error"
+                        )
+                        agent_span.span.children.append(step_span)
+
+        root_span.set(
+            output=result.get("answer"),
+            status=result.get("status")
+        )
+        return result
